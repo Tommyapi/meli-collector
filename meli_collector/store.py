@@ -128,10 +128,36 @@ class Store:
         return [self._row(row) for row in rows if row]
 
     def latest_item(self, item_id: str) -> dict[str, Any] | None:
-        return self._row(self.conn.execute("SELECT * FROM latest_items WHERE item_id=? ORDER BY ts DESC LIMIT 1", (item_id,)).fetchone())
+        """Latest detail-page snapshot, else the latest listing-card snapshot (watch runs only collect listings)."""
+        out = self._row(self.conn.execute("SELECT * FROM latest_items WHERE item_id=? ORDER BY ts DESC LIMIT 1", (item_id,)).fetchone())
+        if out is not None:
+            out.setdefault("source", "item")
+            return out
+        out = self._row(self.conn.execute("SELECT * FROM listings_snapshot WHERE item_id=? ORDER BY ts DESC, is_ad ASC LIMIT 1", (item_id,)).fetchone())
+        if out is not None:
+            out["source"] = "listing"
+            out["sold_text"] = out.get("sold_bucket_text")
+        return out
 
     def growth(self, item_id: str, limit: int = 100) -> list[dict[str, Any]]:
-        rows = self.conn.execute("SELECT * FROM sold_growth WHERE item_id=? ORDER BY ts DESC LIMIT ?", (item_id, limit)).fetchall()
+        """sold_min deltas between consecutive snapshots, combining detail pages and listing cards."""
+        rows = self.conn.execute(
+            """
+            WITH pts AS (
+              SELECT ts, MAX(sold_min) sold_min FROM (
+                SELECT ts, sold_min FROM items_snapshot WHERE item_id=? AND sold_min IS NOT NULL
+                UNION ALL
+                SELECT ts, sold_min FROM listings_snapshot WHERE item_id=? AND sold_min IS NOT NULL
+              ) GROUP BY ts
+            ), ordered AS (
+              SELECT ts, sold_min, LAG(ts) OVER (ORDER BY ts) previous_ts, LAG(sold_min) OVER (ORDER BY ts) previous_sold_min FROM pts
+            )
+            SELECT ? AS item_id, ts, sold_min, previous_ts, previous_sold_min,
+                   CASE WHEN previous_sold_min IS NULL THEN NULL ELSE sold_min - previous_sold_min END AS sold_delta
+            FROM ordered ORDER BY ts DESC LIMIT ?
+            """,
+            (item_id, item_id, item_id, limit),
+        ).fetchall()
         return [self._row(row) for row in rows if row]
 
     def export_rows(self, fmt: str) -> str:
