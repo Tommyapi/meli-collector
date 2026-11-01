@@ -1,0 +1,11 @@
+__pycache__/
+.pytest_cache/
+*.egg-info/
+*.py[cod]
+*.db
+*.sqlite
+data/
+status.json
+.venv/
+REPORT.md
+HANDOFF-*.md
